@@ -1,0 +1,37 @@
+name: car_fault_diagnosis_app
+description: A car fault diagnosis mobile application
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  google_fonts: ^6.1.0
+  
+  # Bluetooth OBD2
+  flutter_blue_plus: ^1.32.0
+  
+  # Camera & ML Kit
+  camera: ^0.10.5
+  google_ml_kit: ^0.16.0
+  image_picker: ^1.0.4
+  
+  # Utilities
+  permission_handler: ^11.0.1
+  path_provider: ^2.1.0
+  path: ^1.9.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  
+  assets:
+    - assets/images/logo.jpeg
+    # - assets/ml/  # For ML models if needed (directory not present; create it or uncomment and adjust when added)
