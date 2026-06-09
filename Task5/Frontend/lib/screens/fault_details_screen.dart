@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'ai_assistant_screen.dart';
 
 class FaultDetailsScreen extends StatelessWidget {
   final Map<String, dynamic> fault;
@@ -213,7 +214,18 @@ class FaultDetailsScreen extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: () {},
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => AiAssistantScreen(
+                            initialFaultCode: fault['code'] as String,
+                            initialFaultDescription:
+                                fault['description'] as String,
+                          ),
+                        ),
+                      );
+                    },
                     icon: const Icon(Icons.chat),
                     label: const Text('Ask AI'),
                     style: ElevatedButton.styleFrom(
