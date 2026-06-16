@@ -24,6 +24,14 @@ dependencies:
   path_provider: ^2.1.0
   path: ^1.9.0
 
+  # Local database & API
+  sqflite: ^2.4.0
+  sqflite_common_ffi: ^2.3.0
+  http: ^1.2.0
+  flutter_dotenv: ^5.2.0
+  url_launcher: ^6.3.0
+  shared_preferences: ^2.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -34,4 +42,5 @@ flutter:
   
   assets:
     - assets/images/logo.jpeg
-    # - assets/ml/  # For ML models if needed (directory not present; create it or uncomment and adjust when added)
+    - database/dtc_codes.db
+    - .env

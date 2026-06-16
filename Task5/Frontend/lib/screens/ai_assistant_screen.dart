@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+
+import '../models/dtc_record.dart';
+import '../services/openrouter_service.dart';
+import '../services/vehicle_profile_service.dart';
 import '../theme/app_theme.dart';
 
 class ChatMessage {
@@ -21,10 +25,12 @@ class AiAssistantScreen extends StatefulWidget {
     super.key,
     this.initialFaultCode,
     this.initialFaultDescription,
+    this.faultRecord,
   });
 
   final String? initialFaultCode;
   final String? initialFaultDescription;
+  final DtcRecord? faultRecord;
 
   @override
   State<AiAssistantScreen> createState() => _AiAssistantScreenState();
@@ -97,7 +103,7 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
     });
   }
 
-  void _sendMessage([String? text]) {
+  void _sendMessage([String? text]) async {
     final message = (text ?? _messageController.text).trim();
     if (message.isEmpty) return;
 
@@ -115,34 +121,59 @@ class _AiAssistantScreenState extends State<AiAssistantScreen> {
     _messageController.clear();
     _scrollToBottom();
 
-    Future.delayed(const Duration(milliseconds: 1200), () {
+    try {
+      final history = _messages
+          .where((m) => !m.isTyping)
+          .map((m) => {
+                'role': m.isUser ? 'user' : 'assistant',
+                'content': m.text,
+              })
+          .toList();
+
+      // Keep last 10 messages for context
+      final recent = history.length > 10
+          ? history.sublist(history.length - 10)
+          : history;
+
+      final reply = await OpenRouterService.instance.chat(
+        messages: recent,
+        faultRecord: widget.faultRecord,
+        vehicleDisplayName:
+            VehicleProfileService.instance.profile.displayName,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _messages.removeLast();
+        _messages.add(
+          ChatMessage(text: reply, isUser: false, time: 'Now'),
+        );
+      });
+    } on OpenRouterException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _messages.removeLast();
+        _messages.add(
+          ChatMessage(text: e.message, isUser: false, time: 'Now'),
+        );
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         _messages.removeLast();
         _messages.add(
           ChatMessage(
-            text: _mockTechnicianReply(message),
+            text: 'Sorry, I could not reach the AI service. Please try again.',
             isUser: false,
             time: 'Now',
           ),
         );
       });
-      _scrollToBottom();
-    });
-  }
-
-  String _mockTechnicianReply(String userMessage) {
-    final lower = userMessage.toLowerCase();
-    if (lower.contains('p0300') || lower.contains('misfire')) {
-      return 'P0300 means your engine detected random misfires across multiple cylinders. This is often caused by worn spark plugs, faulty ignition coils, or a vacuum leak. I\'d recommend checking spark plugs first — it\'s the most common and cheapest fix. Would you like step-by-step guidance?';
     }
-    if (lower.contains('safe') || lower.contains('drive')) {
-      return 'For most warning lights, short trips to a mechanic are okay, but avoid heavy acceleration or long highway drives until we identify the root cause. If the check engine light is flashing, stop driving immediately — that indicates active misfires that can damage your catalytic converter.';
-    }
-    if (lower.contains('cost') || lower.contains('repair')) {
-      return 'Repair costs vary widely. A simple fix like spark plugs might run \$50–\$150, while ignition coil replacement could be \$150–\$400 depending on your vehicle. Share your car model and I can give a more accurate estimate.';
-    }
-    return 'That\'s a great question. Once your OBD2 scan or dashboard scan is connected, I\'ll have full diagnostic context for your vehicle. For now, share any fault codes you see and I\'ll explain what they mean and what to do next.';
+    _scrollToBottom();
   }
 
   @override

@@ -1,8 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 import 'screens/splash_screen.dart';
+import 'services/dtc_database_service.dart';
+import 'services/vehicle_profile_service.dart';
 import 'theme/app_theme.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await dotenv.load(fileName: '.env');
+  await VehicleProfileService.instance.init();
+  await DtcDatabaseService.instance.init();
+
   runApp(const MyApp());
 }
 

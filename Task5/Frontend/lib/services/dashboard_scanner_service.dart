@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:google_ml_kit/google_ml_kit.dart';
 import 'package:image_picker/image_picker.dart';
+import 'openrouter_service.dart';
 
 class DashboardScannerService {
   static List<CameraDescription>? _cameras;
@@ -130,57 +130,41 @@ class DashboardScannerService {
     }
   }
   
-  // Process image using ML Kit
+  // Process image using OpenRouter vision model
   static Future<List<Map<String, dynamic>>> _processImage(File imageFile) async {
     List<Map<String, dynamic>> detected = [];
     
     try {
-      // Convert to InputImage
-      final inputImage = InputImage.fromFile(imageFile);
-      
-      // Initialize object detector
-      final options = ObjectDetectorOptions(
-        mode: DetectionMode.single,
-        classifyObjects: true,
-        multipleObjects: false,
+      final bytes = await imageFile.readAsBytes();
+      final visionDetections =
+          await OpenRouterService.instance.analyzeDashboardImage(
+        imageBytes: bytes,
       );
-      final objectDetector = GoogleMlKit.vision.objectDetector(options: options);
-      
-      // Detect objects in image
-      final List<DetectedObject> objects = await objectDetector.processImage(inputImage);
-      
-      // Process each detected object
-      for (DetectedObject object in objects) {
-        // Check if detected object matches any warning light pattern
-        for (var warning in warningLights.keys) {
-          // In a real implementation, you would use image classification
-          // For demo, we'll simulate detection based on labels
-          if (object.labels.isNotEmpty) {
-            String label = object.labels[0].text.toLowerCase();
-            if (label.contains('light') || 
-                label.contains('warning') ||
-                label.contains('dashboard')) {
-              
-              detected.add({
-                'light': warningLights[warning],
-                'confidence': object.labels[0].confidence,
-                'boundingBox': object.boundingBox,
-              });
-              break;
-            }
-          }
-        }
+
+      for (final detection in visionDetections) {
+        detected.add({
+          'faultCode': detection.faultCode,
+          'light': {
+            'name': detection.warningName,
+            'severity': detection.severity,
+            'description': detection.description,
+            'icon': '⚠️',
+            'color': detection.severity == 'Critical' || detection.severity == 'High'
+                ? '#FF0000'
+                : (detection.severity == 'Medium' ? '#FFA500' : '#FFFF00'),
+          },
+          'confidence': detection.confidence,
+          'boundingBox': null,
+        });
       }
-      
-      await objectDetector.close();
-      
-      // Simulate detection if none found (for demo purposes)
+
+      // Fallback demo result if vision returns nothing
       if (detected.isEmpty) {
-        // Random detection for demo
         final randomWarning = warningLights.keys.toList();
         final randomIndex = DateTime.now().second % randomWarning.length;
         
         detected.add({
+          'faultCode': null,
           'light': warningLights[randomWarning[randomIndex]],
           'confidence': 0.85,
           'boundingBox': null,
@@ -188,7 +172,7 @@ class DashboardScannerService {
       }
       
     } catch (e) {
-      print('ML Kit processing error: $e');
+      print('Vision processing error: $e');
     }
     
     return detected;

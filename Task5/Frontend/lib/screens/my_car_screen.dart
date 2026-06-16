@@ -1,12 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+
+import '../services/dtc_database_service.dart';
+import '../services/vehicle_profile_service.dart';
 import '../theme/app_theme.dart';
 
-class MyCarScreen extends StatelessWidget {
+class MyCarScreen extends StatefulWidget {
   const MyCarScreen({super.key});
 
   @override
+  State<MyCarScreen> createState() => _MyCarScreenState();
+}
+
+class _MyCarScreenState extends State<MyCarScreen> {
+  @override
   Widget build(BuildContext context) {
+    final profile = VehicleProfileService.instance.profile;
     final isWide = AppBreakpoints.isTabletOrLarger(context);
 
     return Scaffold(
@@ -30,7 +39,7 @@ class MyCarScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildVehicleCard(context),
+                _buildVehicleCard(context, profile),
                 const SizedBox(height: 20),
                 Text(
                   'Vehicle Health',
@@ -59,7 +68,7 @@ class MyCarScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildVehicleCard(BuildContext context) {
+  Widget _buildVehicleCard(BuildContext context, VehicleProfile profile) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -98,7 +107,7 @@ class MyCarScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Toyota Camry 2020',
+                  profile.displayName,
                   style: GoogleFonts.poppins(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
@@ -107,7 +116,7 @@ class MyCarScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Plate: ABC-1234 • 45,200 km',
+                  'Plate: ${profile.plate} • ${profile.odometerKm.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},')} km',
                   style: GoogleFonts.poppins(
                     fontSize: 13,
                     color: Colors.white70,
@@ -115,13 +124,14 @@ class MyCarScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
-                    'OBD2 Connected',
+                    'Manufacturer: ${profile.manufacturer}',
                     style: GoogleFonts.poppins(
                       fontSize: 11,
                       color: Colors.white,
@@ -134,18 +144,41 @@ class MyCarScreen extends StatelessWidget {
           ),
           IconButton(
             icon: const Icon(Icons.edit_rounded, color: Colors.white70),
-            onPressed: () {},
+            onPressed: () => _showEditVehicleDialog(context),
           ),
         ],
       ),
     );
   }
 
+  Future<void> _showEditVehicleDialog(BuildContext context) async {
+    final profile = VehicleProfileService.instance.profile;
+    final manufacturers =
+        await DtcDatabaseService.instance.getManufacturers();
+
+    if (!context.mounted) return;
+
+    final updated = await showDialog<VehicleProfile>(
+      context: context,
+      builder: (dialogContext) => _EditVehicleDialog(
+        profile: profile,
+        manufacturers: manufacturers,
+      ),
+    );
+
+    if (updated != null && mounted) {
+      await VehicleProfileService.instance.save(updated);
+      setState(() {});
+    }
+  }
+
   Widget _buildHealthGrid(bool isWide) {
     final items = [
       _HealthItem('Engine', 'Good', Icons.settings_rounded, Color(0xFF43A047)),
-      _HealthItem('Battery', '85%', Icons.battery_charging_full_rounded, Color(0xFF1A73E8)),
-      _HealthItem('Brakes', 'Check Soon', Icons.disc_full_rounded, Color(0xFFF57C00)),
+      _HealthItem('Battery', '85%', Icons.battery_charging_full_rounded,
+          Color(0xFF1A73E8)),
+      _HealthItem('Brakes', 'Check Soon', Icons.disc_full_rounded,
+          Color(0xFFF57C00)),
       _HealthItem('Tires', 'Good', Icons.tire_repair_rounded, Color(0xFF43A047)),
     ];
 
@@ -260,4 +293,128 @@ class _QuickAction {
   const _QuickAction(this.label, this.icon);
   final String label;
   final IconData icon;
+}
+
+class _EditVehicleDialog extends StatefulWidget {
+  const _EditVehicleDialog({
+    required this.profile,
+    required this.manufacturers,
+  });
+
+  final VehicleProfile profile;
+  final List<String> manufacturers;
+
+  @override
+  State<_EditVehicleDialog> createState() => _EditVehicleDialogState();
+}
+
+class _EditVehicleDialogState extends State<_EditVehicleDialog> {
+  late String _selectedManufacturer;
+  late final TextEditingController _modelController;
+  late final TextEditingController _yearController;
+  late final TextEditingController _plateController;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedManufacturer = widget.manufacturers
+            .contains(widget.profile.manufacturer)
+        ? widget.profile.manufacturer
+        : widget.manufacturers.first;
+    _modelController = TextEditingController(text: widget.profile.model);
+    _yearController =
+        TextEditingController(text: widget.profile.year.toString());
+    _plateController = TextEditingController(text: widget.profile.plate);
+  }
+
+  @override
+  void dispose() {
+    _modelController.dispose();
+    _yearController.dispose();
+    _plateController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final year =
+        int.tryParse(_yearController.text.trim()) ?? widget.profile.year;
+    Navigator.pop(
+      context,
+      widget.profile.copyWith(
+        manufacturer: _selectedManufacturer,
+        model: _modelController.text.trim(),
+        year: year,
+        plate: _plateController.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit Vehicle'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DropdownButtonFormField<String>(
+              initialValue: _selectedManufacturer,
+              decoration: const InputDecoration(
+                labelText: 'Manufacturer',
+                border: OutlineInputBorder(),
+              ),
+              items: widget.manufacturers
+                  .map(
+                    (m) => DropdownMenuItem(
+                      value: m,
+                      child: Text(m),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() => _selectedManufacturer = value);
+                }
+              },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _modelController,
+              decoration: const InputDecoration(
+                labelText: 'Model',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _yearController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Year',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _plateController,
+              decoration: const InputDecoration(
+                labelText: 'Plate',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _save,
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
 }

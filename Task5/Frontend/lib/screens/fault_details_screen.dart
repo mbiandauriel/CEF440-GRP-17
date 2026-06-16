@@ -1,44 +1,156 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../config/youtube_links.dart';
+import '../models/dtc_record.dart';
+import '../services/openrouter_service.dart';
+import '../services/vehicle_profile_service.dart';
 import 'ai_assistant_screen.dart';
 
-class FaultDetailsScreen extends StatelessWidget {
+class FaultDetailsScreen extends StatefulWidget {
   final Map<String, dynamic> fault;
 
   const FaultDetailsScreen({super.key, required this.fault});
 
   @override
+  State<FaultDetailsScreen> createState() => _FaultDetailsScreenState();
+}
+
+class _FaultDetailsScreenState extends State<FaultDetailsScreen> {
+  bool _isLoadingAi = true;
+  String _aiExplanation = '';
+  List<String> _suggestedActions = [];
+  String _estimatedCost = 'Loading...';
+  String? _aiError;
+  late String _severity;
+  late Color _severityColor;
+
+  DtcRecord? get _dtcRecord => widget.fault['dtcRecord'] as DtcRecord?;
+
+  @override
+  void initState() {
+    super.initState();
+    _severity = widget.fault['severity'] as String? ?? 'Medium';
+    _severityColor =
+        widget.fault['severityColor'] as Color? ?? Colors.orange;
+    _loadAiAnalysis();
+  }
+
+  Future<void> _loadAiAnalysis() async {
+    final record = _dtcRecord;
+    if (record == null) {
+      setState(() {
+        _isLoadingAi = false;
+        _aiExplanation =
+            'This diagnostic trouble code indicates a potential issue with your vehicle. '
+            'Consult a professional mechanic for accurate diagnosis.';
+        _suggestedActions = const [
+          'Connect professional diagnostic tool for detailed scan',
+          'Check related components visually',
+          'Clear code and test drive to verify if issue persists',
+          'Consult a certified mechanic',
+        ];
+        _estimatedCost = 'Varies — get quote from mechanic';
+      });
+      return;
+    }
+
+    try {
+      final analysis = await OpenRouterService.instance.analyzeFault(
+        record: record,
+        vehicleDisplayName:
+            VehicleProfileService.instance.profile.displayName,
+      );
+      if (!mounted) return;
+      setState(() {
+        _isLoadingAi = false;
+        _aiExplanation = analysis.explanation;
+        _suggestedActions = analysis.suggestedActions;
+        _estimatedCost = analysis.estimatedCost;
+        _severity = analysis.severity;
+        _severityColor = _severityColorFor(analysis.severity);
+      });
+    } on OpenRouterException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingAi = false;
+        _aiError = e.message;
+        _aiExplanation = _fallbackExplanation(widget.fault['code'] as String);
+        _suggestedActions = _fallbackActions(widget.fault['code'] as String);
+        _estimatedCost = _fallbackCost(widget.fault['code'] as String);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingAi = false;
+        _aiError = e.toString();
+        _aiExplanation = _fallbackExplanation(widget.fault['code'] as String);
+        _suggestedActions = _fallbackActions(widget.fault['code'] as String);
+        _estimatedCost = _fallbackCost(widget.fault['code'] as String);
+      });
+    }
+  }
+
+  Color _severityColorFor(String severity) {
+    switch (severity) {
+      case 'Critical':
+        return Colors.red.shade900;
+      case 'High':
+        return Colors.red;
+      case 'Medium':
+        return Colors.orange;
+      case 'Low':
+        return Colors.yellow.shade700;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  Future<void> _openYoutube() async {
+    final url = youtubeUrlForCode(widget.fault['code'] as String);
+    if (url == null) return;
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final fault = widget.fault;
+    final code = fault['code'] as String;
+    final hasYoutube = hasYoutubeTutorial(code);
+
     return Scaffold(
       appBar: AppBar(
-        title: Text('Fault Code: ${fault['code']}'),
-        backgroundColor: fault['severityColor'],
+        title: Text('Fault Code: $code'),
+        backgroundColor: _severityColor,
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Severity Badge
             Center(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                 decoration: BoxDecoration(
-                  color: (fault['severityColor'] as Color).withOpacity(0.1),
+                  color: _severityColor.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: fault['severityColor']),
+                  border: Border.all(color: _severityColor),
                 ),
                 child: Text(
-                  'Severity: ${fault['severity']}',
+                  'Severity: $_severity',
                   style: TextStyle(
-                    color: fault['severityColor'],
+                    color: _severityColor,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
             ),
             const SizedBox(height: 24),
-            // Fault Code
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -54,19 +166,28 @@ class FaultDetailsScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      fault['code'],
+                      code,
                       style: GoogleFonts.poppins(
                         fontSize: 28,
                         fontWeight: FontWeight.bold,
-                        color: fault['severityColor'],
+                        color: _severityColor,
                       ),
                     ),
+                    if (_dtcRecord != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        '${_dtcRecord!.typeLabel} • ${_dtcRecord!.manufacturer}',
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 16),
-            // Description
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -82,7 +203,7 @@ class FaultDetailsScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      fault['description'],
+                      fault['description'] as String,
                       style: GoogleFonts.poppins(fontSize: 16),
                     ),
                   ],
@@ -90,7 +211,6 @@ class FaultDetailsScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            // AI Explanation
             Card(
               color: Colors.blue.shade50,
               child: Padding(
@@ -100,7 +220,8 @@ class FaultDetailsScreen extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        const Icon(Icons.auto_awesome, color: Color(0xFF1A73E8)),
+                        const Icon(Icons.auto_awesome,
+                            color: Color(0xFF1A73E8)),
                         const SizedBox(width: 8),
                         Text(
                           'AI Explanation',
@@ -110,11 +231,29 @@ class FaultDetailsScreen extends StatelessWidget {
                             color: const Color(0xFF1A73E8),
                           ),
                         ),
+                        if (_isLoadingAi) ...[
+                          const SizedBox(width: 12),
+                          const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ],
                       ],
                     ),
+                    if (_aiError != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _aiError!,
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Colors.orange.shade800,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 12),
                     Text(
-                      _getAIExplanation(fault['code']),
+                      _isLoadingAi ? 'Analyzing fault with AI...' : _aiExplanation,
                       style: GoogleFonts.poppins(fontSize: 14, height: 1.5),
                     ),
                   ],
@@ -122,7 +261,6 @@ class FaultDetailsScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            // Suggested Actions
             Card(
               color: Colors.green.shade50,
               child: Padding(
@@ -145,7 +283,7 @@ class FaultDetailsScreen extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 12),
-                    ..._getSuggestedActions(fault['code']).map(
+                    ..._suggestedActions.map(
                       (action) => Padding(
                         padding: const EdgeInsets.only(bottom: 8),
                         child: Row(
@@ -162,7 +300,6 @@ class FaultDetailsScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            // Repair Cost Estimate
             Card(
               color: Colors.orange.shade50,
               child: Padding(
@@ -186,7 +323,7 @@ class FaultDetailsScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      _getEstimatedCost(fault['code']),
+                      _estimatedCost,
                       style: GoogleFonts.poppins(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
@@ -198,7 +335,6 @@ class FaultDetailsScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 24),
-            // Action Buttons
             Row(
               children: [
                 Expanded(
@@ -219,9 +355,10 @@ class FaultDetailsScreen extends StatelessWidget {
                         context,
                         MaterialPageRoute(
                           builder: (_) => AiAssistantScreen(
-                            initialFaultCode: fault['code'] as String,
+                            initialFaultCode: code,
                             initialFaultDescription:
                                 fault['description'] as String,
+                            faultRecord: _dtcRecord,
                           ),
                         ),
                       );
@@ -236,63 +373,58 @@ class FaultDetailsScreen extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {},
-                icon: const Icon(Icons.play_circle_outline),
-                label: const Text('Watch Tutorial on YouTube'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+            if (hasYoutube) ...[
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _openYoutube,
+                  icon: const Icon(Icons.play_circle_outline),
+                  label: const Text('Watch Tutorial on YouTube'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
                 ),
               ),
-            ),
+            ],
           ],
         ),
       ),
     );
   }
 
-  String _getAIExplanation(String code) {
+  String _fallbackExplanation(String code) {
     if (code == 'P0300') {
-      return 'This fault code indicates that your engine is misfiring in multiple cylinders. This means the engine is not burning fuel properly in one or more cylinders. Common causes include faulty spark plugs, ignition coils, fuel injectors, or vacuum leaks.';
+      return 'This fault code indicates that your engine is misfiring in multiple cylinders.';
     } else if (code == 'P0420') {
-      return 'This code suggests your catalytic converter is not working efficiently. The catalytic converter reduces harmful emissions. This could be due to a failing converter, oxygen sensor issues, or exhaust leaks.';
+      return 'This code suggests your catalytic converter is not working efficiently.';
     }
-    return 'This diagnostic trouble code indicates a potential issue with your vehicle. AI analysis suggests checking related components and consulting a professional mechanic for accurate diagnosis.';
+    return 'This diagnostic trouble code indicates a potential issue with your vehicle.';
   }
 
-  List<String> _getSuggestedActions(String code) {
+  List<String> _fallbackActions(String code) {
     if (code == 'P0300') {
-      return [
+      return const [
         'Replace spark plugs and ignition coils',
         'Check fuel injectors for clogging',
         'Inspect for vacuum leaks',
-        'Perform compression test on cylinders',
       ];
     } else if (code == 'P0420') {
-      return [
+      return const [
         'Check oxygen sensors for proper operation',
         'Inspect catalytic converter for damage',
         'Check for exhaust system leaks',
-        'Use catalytic converter cleaner as temporary solution',
       ];
     }
-    return [
-      'Connect professional diagnostic tool for detailed scan',
+    return const [
       'Check related components visually',
-      'Clear code and test drive to verify if issue persists',
       'Consult a certified mechanic',
     ];
   }
 
-  String _getEstimatedCost(String code) {
-    if (code == 'P0300') {
-      return 'XAF 75,000 - 200,000';
-    } else if (code == 'P0420') {
-      return 'XAF 250,000 - 600,000';
-    }
-    return 'Varies - Get quote from mechanic';
+  String _fallbackCost(String code) {
+    if (code == 'P0300') return 'XAF 75,000 - 200,000';
+    if (code == 'P0420') return 'XAF 250,000 - 600,000';
+    return 'Varies — get quote from mechanic';
   }
 }

@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/obd2_service.dart';
 import '../services/dashboard_scanner_service.dart';
+import '../services/fault_lookup_service.dart';
 import 'fault_details_screen.dart';
 
 class DiagnosisScreen extends StatefulWidget {
@@ -46,6 +47,7 @@ class _DiagnosisScreenState extends State<DiagnosisScreen> {
       _isScanning = false;
     });
     
+    if (!mounted) return;
     if (_obdDevices.isNotEmpty) {
       _showDeviceSelectionDialog();
     } else {
@@ -121,23 +123,73 @@ class _DiagnosisScreenState extends State<DiagnosisScreen> {
     });
     
     List<Map<String, String>> faultCodes = await OBD2Service.readFaultCodes();
+    final enriched = <Map<String, dynamic>>[];
+
+    for (final code in faultCodes) {
+      enriched.add(await enrichFaultFromDatabase(
+        code: code['code']!,
+        fallbackDescription: code['description'],
+      ));
+    }
     
     setState(() {
-      _diagnosisResults = faultCodes.map((code) => {
-        'code': code['code'],
-        'description': code['description'],
-        'severity': 'High',
-        'severityColor': Colors.red,
-        'type': 'obd',
-      }).toList();
+      _diagnosisResults = enriched;
       _isScanning = false;
     });
     
+    if (!mounted) return;
     if (_diagnosisResults.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Found ${_diagnosisResults.length} fault codes')),
       );
     }
+  }
+
+  Future<void> _runDemoScan() async {
+    setState(() => _isScanning = true);
+
+    const demoCodes = ['P0300', 'P0420'];
+    final enriched = <Map<String, dynamic>>[];
+    for (final code in demoCodes) {
+      enriched.add(await enrichFaultFromDatabase(code: code));
+    }
+
+    setState(() {
+      _diagnosisResults = enriched;
+      _isScanning = false;
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Demo scan complete — ${enriched.length} faults loaded from database',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _showManualLookupDialog() async {
+    final code = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => const _LookupFaultCodeDialog(),
+    );
+
+    if (code == null || !mounted) return;
+
+    setState(() => _isScanning = true);
+    final result = await enrichFaultFromDatabase(code: code);
+    if (!mounted) return;
+
+    setState(() {
+      _isScanning = false;
+      final exists =
+          _diagnosisResults.any((r) => r['code'] == result['code']);
+      if (!exists) {
+        _diagnosisResults = [..._diagnosisResults, result];
+      }
+    });
   }
   
   Future<void> _scanDashboardWithCamera() async {
@@ -158,20 +210,43 @@ class _DiagnosisScreenState extends State<DiagnosisScreen> {
       ),
     ).then((results) {
       if (results != null && results.isNotEmpty) {
-        setState(() {
-          for (var result in results) {
-            _diagnosisResults.add({
-              'code': result['light']['name'].toUpperCase().replaceAll(' ', '_'),
-              'description': result['light']['description'],
-              'severity': result['light']['severity'],
-              'severityColor': _getSeverityColor(result['light']['severity']),
-              'type': 'camera',
-              'confidence': result['confidence'],
-            });
-          }
-        });
+        _applyCameraResults(List<Map<String, dynamic>>.from(results));
       }
     });
+  }
+
+  Future<void> _applyCameraResults(List<Map<String, dynamic>> results) async {
+    final merged = List<Map<String, dynamic>>.from(_diagnosisResults);
+
+    for (final result in results) {
+      final faultCode = (result['faultCode'] as String?)?.toUpperCase();
+      final light = result['light'] as Map<String, dynamic>;
+      final description = light['description']?.toString() ?? 'Unknown warning';
+
+      if (faultCode != null &&
+          RegExp(r'^[PBCU][0-9A-F]{4}$').hasMatch(faultCode)) {
+        final enriched = await enrichFaultFromDatabase(
+          code: faultCode,
+          fallbackDescription: description,
+          sourceType: 'camera',
+        );
+        enriched['confidence'] = result['confidence'];
+        merged.add(enriched);
+      } else {
+        merged.add({
+          'code': light['name'].toString().toUpperCase().replaceAll(' ', '_'),
+          'description': description,
+          'severity': light['severity']?.toString() ?? 'Medium',
+          'severityColor':
+              _getSeverityColor(light['severity']?.toString() ?? 'Medium'),
+          'type': 'camera',
+          'confidence': result['confidence'],
+        });
+      }
+    }
+
+    if (!mounted) return;
+    setState(() => _diagnosisResults = merged);
   }
   
   Color _getSeverityColor(String severity) {
@@ -281,6 +356,28 @@ class _DiagnosisScreenState extends State<DiagnosisScreen> {
             ),
             const SizedBox(height: 16),
             
+            // Demo & manual lookup (works without OBD hardware)
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _isScanning ? null : _runDemoScan,
+                    icon: const Icon(Icons.science_outlined),
+                    label: const Text('Demo Scan'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _isScanning ? null : _showManualLookupDialog,
+                    icon: const Icon(Icons.search),
+                    label: const Text('Lookup Code'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            
             // Diagnosis Options
             Row(
               children: [
@@ -301,19 +398,12 @@ class _DiagnosisScreenState extends State<DiagnosisScreen> {
                     subtitle: 'From gallery',
                     color: const Color(0xFF43A047),
                     onTap: () async {
+                      setState(() => _isScanning = true);
                       var results = await DashboardScannerService.scanFromGallery();
+                      if (!mounted) return;
+                      setState(() => _isScanning = false);
                       if (results.isNotEmpty) {
-                        setState(() {
-                          for (var result in results) {
-                            _diagnosisResults.add({
-                              'code': result['light']['name'].toUpperCase().replaceAll(' ', '_'),
-                              'description': result['light']['description'],
-                              'severity': result['light']['severity'],
-                              'severityColor': _getSeverityColor(result['light']['severity']),
-                              'type': 'camera',
-                            });
-                          }
-                        });
+                        await _applyCameraResults(results);
                       }
                     },
                   ),
@@ -688,10 +778,15 @@ class _DashboardCameraScannerState extends State<DashboardCameraScanner> {
                       itemCount: _detectedLights.length,
                       itemBuilder: (context, index) {
                         final light = _detectedLights[index]['light'];
+                        final faultCode = _detectedLights[index]['faultCode'] as String?;
                         return ListTile(
                           leading: Text(light['icon'], style: const TextStyle(fontSize: 24)),
                           title: Text(light['name']),
-                          subtitle: Text(light['description']),
+                          subtitle: Text(
+                            faultCode != null && faultCode.isNotEmpty
+                                ? '${light['description']}\nLikely code: $faultCode'
+                                : light['description'],
+                          ),
                           trailing: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
@@ -739,5 +834,69 @@ class _DashboardCameraScannerState extends State<DashboardCameraScanner> {
       case 'Low': return Colors.yellow.shade700;
       default: return Colors.grey;
     }
+  }
+}
+
+class _LookupFaultCodeDialog extends StatefulWidget {
+  const _LookupFaultCodeDialog();
+
+  @override
+  State<_LookupFaultCodeDialog> createState() => _LookupFaultCodeDialogState();
+}
+
+class _LookupFaultCodeDialogState extends State<_LookupFaultCodeDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.pop(context, _controller.text.trim().toUpperCase());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Lookup Fault Code'),
+      content: Form(
+        key: _formKey,
+        child: TextFormField(
+          controller: _controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.characters,
+          decoration: const InputDecoration(
+            labelText: 'Fault code (e.g. P0300)',
+            hintText: 'P0300',
+            border: OutlineInputBorder(),
+          ),
+          validator: (value) {
+            if (value == null || value.trim().isEmpty) {
+              return 'Enter a fault code';
+            }
+            if (!RegExp(r'^[PBCU][0-9A-F]{4}$', caseSensitive: false)
+                .hasMatch(value.trim())) {
+              return 'Enter a valid OBD-II code (e.g. P0300)';
+            }
+            return null;
+          },
+          onFieldSubmitted: (_) => _submit(),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _submit,
+          child: const Text('Lookup'),
+        ),
+      ],
+    );
   }
 }
